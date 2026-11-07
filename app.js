@@ -9,7 +9,7 @@
   const DEFAULTS = {
     subject: "Math", grade: "Grade 10-12", difficulty: "Medium",
     style: "visual", personality: "friendly",
-    model: "gemini-2.5-flash", voice: true, rate: "1",
+    model: "gemini-3.8-flash", voice: true, rate: "1",
   };
   const FIELDS = {
     subject: "set-subject", grade: "set-grade", difficulty: "set-difficulty",
