@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#000000" />
   <title>BoardTutor</title>
   <link rel="stylesheet" href="styles.css" />
@@ -12,17 +12,14 @@
   <div class="app">
     <!-- Photo header (phone portrait only). Tutor subtitles show here. -->
     <header class="hero" id="hero">
-      <p class="caption-text hero-caption"></p>
     </header>
 
     <!-- Whiteboard: view-only in phone portrait, editable when rotated / on tablet & computer -->
     <section class="board-wrap" id="board-wrap">
       <div id="board"></div>
       <div id="board-loading" class="board-loading">Loading whiteboard…</div>
-      <p class="caption-text board-caption"></p>
       <button type="button" id="btn-expand" class="expand-btn" aria-label="Expand whiteboard">
-        <svg class="ico-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
-        <svg class="ico-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10h-6V4M4 14h6v6M14 10l7-7M10 14l-7 7"/></svg>
+        <svg class="ico-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
       </button>
     </section>
 
