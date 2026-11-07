@@ -24,6 +24,7 @@
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
   }
   const settings = loadSettings();
+  if (settings.model === "gemini-2.5-flash") { settings.model = DEFAULTS.model; saveSettings(settings); } // migrate old default
   Object.entries(FIELDS).forEach(([key, id]) => {
     const el = document.getElementById(id);
     el.value = settings[key];
@@ -185,7 +186,7 @@
   const KEY_STORE = "boardtutor.key.v1";
   const keyInput = document.getElementById("set-key");
   // Paste your restricted Gemini key between the quotes below (see setup steps).
-  const BUILT_IN_KEY = "1067044745392";
+  const BUILT_IN_KEY = "AIzaSyA3REzsAtHAD3C7fRkknlZyYpeXkkim75o";
   function getStoredKey() { try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; } }
   function getKey() { return getStoredKey() || BUILT_IN_KEY; }
   keyInput.value = getStoredKey();
@@ -279,7 +280,7 @@ Draw items in the order you want them to appear. Put a text label near each shap
     const img = await boardImage();
     if (img) contents[contents.length - 1].parts.push({ inline_data: { mime_type: "image/png", data: img } });
 
-    const model = encodeURIComponent(settings.model || "gemini-2.5-flash");
+    const model = encodeURIComponent(settings.model || "gemini-3.8-flash");
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
