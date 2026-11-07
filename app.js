@@ -108,49 +108,28 @@
   }
   const phonePortrait = () => isPhone() && isPortrait();
 
-  // Keep the app exactly as tall as the visible area so the keyboard never covers the toolbar.
-  function fit() {
-    const vv = window.visualViewport;
-    const h = vv ? vv.height : window.innerHeight;
-    const t = vv ? vv.offsetTop : 0;
-    root.style.setProperty("--vh", h + "px");
-    root.style.setProperty("--vt", t + "px");
-    document.body.classList.toggle("kb", h < vpSize().h * 0.8);
-    if (t) window.scrollTo(0, 0);
-  }
   function layout() {
     const portrait = phonePortrait();
     const sideways = isPhone() && !isPortrait();
     document.body.classList.toggle("mode-portrait", portrait);
     document.body.classList.toggle("mode-full", !portrait);
     document.body.classList.toggle("no-type", sideways);
-    if (!portrait) document.body.classList.remove("board-max");
     if (setViewHook) setViewHook(portrait);
-    fit();
   }
   window.addEventListener("resize", layout);
   window.addEventListener("orientationchange", () => setTimeout(layout, 200));
   document.addEventListener("fullscreenchange", layout);
   if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener("change", () => setTimeout(layout, 100));
-  if (window.visualViewport) {
-    visualViewport.addEventListener("resize", fit);
-    visualViewport.addEventListener("scroll", fit);
-  }
 
   $("btn-expand").addEventListener("click", async () => {
-    const b = document.body;
-    if (b.classList.contains("board-max")) { b.classList.remove("board-max"); return; }
     try {
-      // Android Chrome: real full screen + sideways
+      if (document.fullscreenElement) { await document.exitFullscreen(); return; }
       await document.documentElement.requestFullscreen();
-      await screen.orientation.lock("landscape");
-      return;
+      await screen.orientation.lock("landscape"); // Android Chrome
     } catch (e) {
       try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (_) {}
+      toast("Rotate your phone sideways for the full whiteboard.");
     }
-    // iPhone etc.: can't force rotation, so enlarge the board instead
-    b.classList.add("board-max");
-    toast("Rotate your phone sideways to draw and use all the options.");
   });
 
   // ---------- Menu drawer ----------
