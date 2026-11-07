@@ -184,8 +184,11 @@
   // ---------- AI tutor (Gemini) ----------
   const KEY_STORE = "boardtutor.key.v1";
   const keyInput = document.getElementById("set-key");
-  function getKey() { try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; } }
-  keyInput.value = getKey();
+  // Paste your restricted Gemini key between the quotes below (see setup steps).
+  const BUILT_IN_KEY = "1067044745392";
+  function getStoredKey() { try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; } }
+  function getKey() { return getStoredKey() || BUILT_IN_KEY; }
+  keyInput.value = getStoredKey();
   keyInput.addEventListener("change", () => {
     try { localStorage.setItem(KEY_STORE, keyInput.value.trim()); } catch (e) {}
   });
