@@ -11,6 +11,7 @@
     <div class="brand">✏️ BoardTutor</div>
     <div class="actions">
       <button id="btn-demo" class="primary">▶ Demo lesson</button>
+      <button id="btn-new">New lesson</button>
       <button id="btn-clear">Clear board</button>
       <button id="btn-export">Export</button>
       <button id="btn-import">Import</button>
@@ -61,7 +62,24 @@
         </select>
       </label>
 
-      <p class="hint">Settings save automatically in this browser. The AI tutor connects in phase 2.</p>
+      <hr />
+
+      <label>Gemini API key
+        <input id="set-key" type="password" placeholder="Paste your key" autocomplete="off" />
+      </label>
+      <p class="hint">Free key at aistudio.google.com/apikey. It stays in this browser and is never exported.</p>
+
+      <label>Model
+        <input id="set-model" type="text" />
+      </label>
+
+      <label class="row"><input type="checkbox" id="set-voice" /> Tutor speaks aloud</label>
+
+      <label>Speech speed
+        <input id="set-rate" type="range" min="0.7" max="1.4" step="0.1" />
+      </label>
+
+      <p class="hint">Settings save automatically in this browser.</p>
     </aside>
 
     <section class="board-wrap">
@@ -72,7 +90,8 @@
     <section class="tutor">
       <div id="tutor-log" class="tutor-log"></div>
       <form id="tutor-form" class="tutor-form">
-        <input id="tutor-input" type="text" placeholder="Ask your tutor… (AI connects in phase 2)" autocomplete="off" />
+        <input id="tutor-input" type="text" placeholder="Ask or answer…" autocomplete="off" />
+        <button type="button" id="btn-mic" title="Speak">🎤</button>
         <button type="submit">Send</button>
       </form>
     </section>
