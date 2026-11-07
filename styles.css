@@ -61,6 +61,14 @@ button.primary:hover { background: #2f5bd0; }
   flex: 1; padding: 8px; font: inherit; border: 1px solid var(--line); border-radius: 8px;
 }
 .only-mobile { display: none; }
+.settings input[type="text"], .settings input[type="password"] {
+  width: 100%; margin-top: 4px; padding: 7px; font: inherit;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.settings input[type="range"] { width: 100%; }
+.settings hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.settings label.row { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+#btn-mic.rec { background: #ffe3e3; border-color: #e03131; }
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; grid-template-rows: 1fr 220px; }
