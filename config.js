@@ -1,0 +1,6 @@
+// BoardTutor settings you may want to edit.
+window.BOARDTUTOR_CONFIG = {
+  // Paste your restricted Gemini key (starts with AIza) between the quotes.
+  apiKey: "",
+  model: "gemini-3.8-flash",
+};

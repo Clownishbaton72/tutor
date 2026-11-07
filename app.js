@@ -1,0 +1,624 @@
+/* BoardTutor
+   Phone portrait : photo header + view-only whiteboard + toolbar (type or talk)
+   Phone sideways : full-screen editable whiteboard, mic only (no typing)
+   Tablet/computer: full whiteboard with typing
+   Everything else lives in the ☰ menu. */
+
+(function () {
+  "use strict";
+
+  const CFG = window.BOARDTUTOR_CONFIG || {};
+  const $ = (id) => document.getElementById(id);
+  const root = document.querySelector(".app");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ---------- Settings (localStorage) ----------
+  const SETTINGS_KEY = "boardtutor.settings.v1";
+  const DEFAULT_MODEL = CFG.model || "gemini-3.8-flash";
+  const DEFAULTS = {
+    subject: "Math", grade: "Grade 10-12", difficulty: "Medium",
+    style: "visual", personality: "friendly",
+    model: DEFAULT_MODEL, voice: true, rate: "1",
+  };
+  const FIELDS = {
+    subject: "set-subject", grade: "set-grade", difficulty: "set-difficulty",
+    style: "set-style", personality: "set-personality", model: "set-model",
+  };
+
+  function loadSettings() {
+    try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; }
+    catch (e) { return { ...DEFAULTS }; }
+  }
+  function saveSettings(s) {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  const settings = loadSettings();
+  if (settings.model === "gemini-2.5-flash") { settings.model = DEFAULT_MODEL; saveSettings(settings); } // old default
+  Object.entries(FIELDS).forEach(([key, id]) => {
+    const el = $(id);
+    el.value = settings[key];
+    el.addEventListener("change", () => { settings[key] = el.value; saveSettings(settings); });
+  });
+
+  // ---------- IndexedDB (whiteboard sessions + progress + background photo) ----------
+  const DB_NAME = "boardtutor", DB_VERSION = 1;
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("progress")) db.createObjectStore("progress", { keyPath: "id" });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbGet(store, id) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const r = db.transaction(store).objectStore(store).get(id);
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbPut(store, value) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction(store, "readwrite");
+      tx.objectStore(store).put(value);
+      tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+    });
+  }
+  async function idbAll(store) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const r = db.transaction(store).objectStore(store).getAll();
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  }
+
+  // ---------- Toast ----------
+  let toastTimer = null;
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+  }
+
+  // ---------- Layout: phone portrait / phone sideways / tablet & computer ----------
+  const FORCE_PHONE = /[?&]phone=1/.test(location.search); // handy for testing on a computer
+  let setViewHook = null;
+
+  function vpSize() {
+    const d = document.documentElement;
+    return { w: d.clientWidth, h: d.clientHeight };
+  }
+  function isPhone() {
+    const { w, h } = vpSize();
+    return FORCE_PHONE || (matchMedia("(pointer: coarse)").matches && Math.min(w, h) < 500);
+  }
+  function isPortrait() {
+    const { w, h } = vpSize();
+    if (FORCE_PHONE) return h >= w;
+    try {
+      if (screen.orientation && screen.orientation.type) return screen.orientation.type.indexOf("portrait") === 0;
+    } catch (e) {}
+    return h >= w; // keyboard-safe fallback: layout viewport
+  }
+  const phonePortrait = () => isPhone() && isPortrait();
+
+  // Keep the app exactly as tall as the visible area so the keyboard never covers the toolbar.
+  function fit() {
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    const t = vv ? vv.offsetTop : 0;
+    root.style.setProperty("--vh", h + "px");
+    root.style.setProperty("--vt", t + "px");
+    document.body.classList.toggle("kb", h < vpSize().h * 0.8);
+    if (t) window.scrollTo(0, 0);
+  }
+  function layout() {
+    const portrait = phonePortrait();
+    const sideways = isPhone() && !isPortrait();
+    document.body.classList.toggle("mode-portrait", portrait);
+    document.body.classList.toggle("mode-full", !portrait);
+    document.body.classList.toggle("no-type", sideways);
+    if (!portrait) document.body.classList.remove("board-max");
+    if (setViewHook) setViewHook(portrait);
+    fit();
+  }
+  window.addEventListener("resize", layout);
+  window.addEventListener("orientationchange", () => setTimeout(layout, 200));
+  document.addEventListener("fullscreenchange", layout);
+  if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener("change", () => setTimeout(layout, 100));
+  if (window.visualViewport) {
+    visualViewport.addEventListener("resize", fit);
+    visualViewport.addEventListener("scroll", fit);
+  }
+
+  $("btn-expand").addEventListener("click", async () => {
+    const b = document.body;
+    if (b.classList.contains("board-max")) { b.classList.remove("board-max"); return; }
+    try {
+      // Android Chrome: real full screen + sideways
+      await document.documentElement.requestFullscreen();
+      await screen.orientation.lock("landscape");
+      return;
+    } catch (e) {
+      try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (_) {}
+    }
+    // iPhone etc.: can't force rotation, so enlarge the board instead
+    b.classList.add("board-max");
+    toast("Rotate your phone sideways to draw and use all the options.");
+  });
+
+  // ---------- Menu drawer ----------
+  const drawer = $("drawer");
+  function openMenu() { drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); }
+  function closeMenu() { drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); }
+  $("btn-menu").addEventListener("click", () => { $("tutor-input").blur(); openMenu(); });
+  $("btn-close-menu").addEventListener("click", closeMenu);
+  $("drawer-backdrop").addEventListener("click", closeMenu);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+
+  // ---------- Background photo (customizable, default = car) ----------
+  function applyHero(dataUrl) {
+    if (dataUrl) root.style.setProperty("--hero", 'url("' + dataUrl + '")');
+    else root.style.removeProperty("--hero");
+  }
+  idbGet("progress", "hero").then((h) => { if (h && h.dataUrl) applyHero(h.dataUrl); }).catch(() => {});
+
+  function fileToDataUrl(file, maxW) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      const u = URL.createObjectURL(file);
+      img.onload = () => {
+        const sc = Math.min(1, maxW / img.width);
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(u);
+        res(c.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => { URL.revokeObjectURL(u); rej(new Error("bad image")); };
+      img.src = u;
+    });
+  }
+  $("btn-hero").addEventListener("click", () => $("file-hero").click());
+  $("file-hero").addEventListener("change", async () => {
+    const f = $("file-hero").files[0];
+    $("file-hero").value = "";
+    if (!f) return;
+    try {
+      const url = await fileToDataUrl(f, 1280);
+      await idbPut("progress", { id: "hero", dataUrl: url });
+      applyHero(url);
+      toast("Background updated");
+    } catch (e) { toast("Couldn't use that image."); }
+  });
+  $("btn-hero-reset").addEventListener("click", async () => {
+    await idbPut("progress", { id: "hero", dataUrl: "" }).catch(() => {});
+    applyHero("");
+    toast("Background reset");
+  });
+
+  // ---------- Voice (speech out + speech in) ----------
+  const synth = window.speechSynthesis;
+  let interacted = false; // browsers only allow speech after a user gesture
+  ["pointerdown", "keydown"].forEach((ev) =>
+    window.addEventListener(ev, () => { interacted = true; }, { once: true }));
+
+  const voiceEl = $("set-voice");
+  voiceEl.checked = !!settings.voice;
+  voiceEl.addEventListener("change", () => {
+    settings.voice = voiceEl.checked; saveSettings(settings);
+    if (!voiceEl.checked && synth) synth.cancel();
+  });
+  const rateEl = $("set-rate");
+  rateEl.value = settings.rate;
+  rateEl.addEventListener("input", () => { settings.rate = rateEl.value; saveSettings(settings); });
+
+  function pickVoice() {
+    if (!synth) return null;
+    const lang = (navigator.language || "en-US").toLowerCase().slice(0, 2);
+    const voices = synth.getVoices().filter((v) => v.lang.toLowerCase().startsWith(lang));
+    return voices.find((v) => /natural|google|premium|enhanced/i.test(v.name)) || voices[0] || null;
+  }
+  function speak(text) {
+    if (!settings.voice || !synth || !interacted) return;
+    const clean = String(text).replace(/[*_`#]/g, "");
+    if (!clean.trim()) return;
+    const u = new SpeechSynthesisUtterance(clean);
+    let rate = Number(settings.rate) || 1;
+    if (settings.personality === "patient") rate *= 0.92;
+    if (settings.personality === "energetic") { rate *= 1.08; u.pitch = 1.15; }
+    u.rate = rate;
+    const v = pickVoice(); if (v) u.voice = v;
+    synth.speak(u);
+  }
+
+  // ---------- Tutor subtitles + conversation log ----------
+  const log = $("tutor-log");
+  function setCaption(text) {
+    document.querySelectorAll(".caption-text").forEach((el) => { el.textContent = text || ""; });
+  }
+  function say(text, who, opts) {
+    const d = document.createElement("div");
+    d.className = "msg " + (who || "tutor");
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    if ((who || "tutor") === "tutor") {
+      setCaption(text);
+      if (!(opts && opts.silent)) speak(text);
+    }
+  }
+  say("Hi! Pick a subject in the menu, tell me what you want to learn, and I'll teach it on the board. Or try the demo lesson.", "tutor", { silent: true });
+
+  $("tutor-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("tutor-input");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    ask(text);
+  });
+
+  // ---------- Whiteboard ----------
+  let api = null;
+
+  function draw(skeletons) {
+    if (!api) return;
+    const els = ExcalidrawLib.convertToExcalidrawElements(skeletons);
+    api.updateScene({ elements: [...api.getSceneElements(), ...els] });
+    api.scrollToContent(els, { fitToViewport: false, animate: true });
+  }
+
+  async function demoLesson() {
+    if (!api) return;
+    const y0 = 40 + Math.max(0, ...api.getSceneElements().filter(e => !e.isDeleted).map(e => e.y + (e.height || 0)));
+    say("Let's add 1/2 + 1/4 together. Watch the board.");
+    draw([{ type: "text", x: 60, y: y0, text: "Adding fractions: 1/2 + 1/4", fontSize: 32 }]);
+    await sleep(1200);
+
+    say("Step 1: draw one whole, split in 4 equal parts.");
+    draw([
+      { type: "rectangle", x: 60, y: y0 + 70, width: 320, height: 80 },
+      { type: "line", x: 140, y: y0 + 70, width: 0, height: 80 },
+      { type: "line", x: 220, y: y0 + 70, width: 0, height: 80 },
+      { type: "line", x: 300, y: y0 + 70, width: 0, height: 80 },
+    ]);
+    await sleep(1400);
+
+    say("Step 2: 1/2 covers two of the four parts.");
+    draw([
+      { type: "rectangle", x: 60, y: y0 + 70, width: 160, height: 80,
+        backgroundColor: "#a5d8ff", fillStyle: "solid", strokeColor: "#1971c2" },
+      { type: "text", x: 60, y: y0 + 160, text: "1/2 = 2/4", fontSize: 24, strokeColor: "#1971c2" },
+    ]);
+    await sleep(1400);
+
+    say("Step 3: 1/4 is one more part.");
+    draw([
+      { type: "rectangle", x: 220, y: y0 + 70, width: 80, height: 80,
+        backgroundColor: "#b2f2bb", fillStyle: "solid", strokeColor: "#2f9e44" },
+      { type: "text", x: 220, y: y0 + 160, text: "+ 1/4", fontSize: 24, strokeColor: "#2f9e44" },
+    ]);
+    await sleep(1400);
+
+    draw([{ type: "text", x: 60, y: y0 + 210, text: "2/4 + 1/4 = 3/4", fontSize: 30, strokeColor: "#e03131" }]);
+    await sleep(900);
+    say("Your turn: what is 1/2 + 1/8? Tell me your answer.");
+  }
+
+  // ---------- AI tutor (Gemini) ----------
+  const KEY_STORE = "boardtutor.key.v1";
+  const BUILT_IN_KEY = CFG.apiKey || "";
+  const keyInput = $("set-key");
+  function getStoredKey() { try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; } }
+  function getKey() { return getStoredKey() || BUILT_IN_KEY; }
+  keyInput.value = getStoredKey();
+  keyInput.addEventListener("change", () => {
+    try { localStorage.setItem(KEY_STORE, keyInput.value.trim()); } catch (e) {}
+  });
+
+  let history = []; // [{ role: "user" | "model", text }]
+  let busy = false;
+
+  function persistHistory() {
+    history = history.slice(-30);
+    idbPut("progress", { id: "history", items: history, updated: Date.now() }).catch(() => {});
+  }
+  idbGet("progress", "history").then((h) => {
+    if (!h || !h.items) return;
+    history = h.items;
+    history.forEach((m) => {
+      if (m.role === "user") say(m.text, "me", { silent: true });
+      else {
+        try {
+          const o = JSON.parse(m.text);
+          if (o.say) say(o.say, "tutor", { silent: true });
+          if (o.question) say(o.question, "tutor", { silent: true });
+        } catch (e) {}
+      }
+    });
+  }).catch(() => {});
+
+  function systemPrompt() {
+    const s = settings;
+    const personas = {
+      friendly: "a warm, encouraging coach",
+      patient: "calm, patient and reassuring",
+      socratic: "Socratic: guide mostly with questions instead of telling",
+      energetic: "upbeat and energetic",
+    };
+    const styles = {
+      visual: "Lean heavily on diagrams, colour and drawings, with very few words.",
+      step: "Break everything into small numbered steps, one idea per turn.",
+      concise: "Be brief: short explanations and few steps.",
+    };
+    return `You are a tutor teaching at a whiteboard. Subject: ${s.subject}. Student level: ${s.grade}. Difficulty: ${s.difficulty}. Personality: ${personas[s.personality]}. Teaching style: ${styles[s.style]}
+
+TEACHING RULES
+- Teach, do not just hand over answers. Cover one small idea per turn, then check understanding.
+- Always use the board: draw diagrams, worked steps, labelled examples.
+- When the student answers a question, say whether it is right, explain why, and if wrong give a hint before the full solution.
+- If the student sends a picture of the board, look at what they drew or wrote and respond to it.
+- The student is often on a phone and may only be able to speak or type short answers, so ask questions they can answer in a few words.
+- Keep spoken text short (1-3 sentences), plain text, no markdown, no LaTeX. Write maths like 3/4, x^2, sqrt(9).
+- Reply in the language the student uses.
+
+OUTPUT: reply with JSON only, in exactly this shape:
+{"say": "what you say out loud", "clear": false, "board": [ ...items... ], "question": "a short check question, or null"}
+
+"clear": true wipes the board first (use when starting a new topic).
+Board coordinates: each turn you draw in a fresh area 900 wide x 500 tall, origin (0,0) top-left, y goes down. It is placed below earlier work automatically. Keep items inside that area and avoid overlaps. The board is shown on a small screen, so use big text (size 28 or more) and few items.
+Item types:
+{"type":"text","x":0,"y":0,"text":"short text, use \\n for lines","size":28,"color":"#1971c2"}
+{"type":"rectangle"|"ellipse"|"diamond","x":0,"y":0,"w":160,"h":80,"color":"#1e1e1e","fill":"#a5d8ff"}   (fill optional)
+{"type":"arrow"|"line","x":0,"y":0,"w":120,"h":0,"color":"#1e1e1e"}   (w,h are the end point offset from x,y and may be negative)
+Draw items in the order you want them to appear. Put a text label near each shape (shape text is separate).`;
+  }
+
+  async function boardImage() {
+    try {
+      const els = api.getSceneElements().filter((e) => !e.isDeleted);
+      if (!els.length) return null;
+      const blob = await ExcalidrawLib.exportToBlob({
+        elements: els,
+        appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
+        files: api.getFiles(),
+        mimeType: "image/png",
+        getDimensions: (w, h) => {
+          const sc = Math.min(1, 1024 / Math.max(w, h));
+          return { width: w * sc, height: h * sc, scale: sc };
+        },
+      });
+      return await new Promise((res) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).split(",")[1]);
+        fr.readAsDataURL(blob);
+      });
+    } catch (e) { return null; }
+  }
+
+  async function callGemini() {
+    const key = getKey();
+    if (!key) throw new Error("NOKEY");
+    const contents = history.slice(-20).map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+    const img = await boardImage();
+    if (img) contents[contents.length - 1].parts.push({ inline_data: { mime_type: "image/png", data: img } });
+
+    const model = encodeURIComponent(settings.model || DEFAULT_MODEL);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt() }] },
+        contents,
+        generationConfig: { responseMimeType: "application/json", temperature: 0.7 },
+      }),
+    });
+    if (!res.ok) {
+      let msg = "";
+      try { msg = (await res.json()).error.message; } catch (e) {}
+      throw new Error(`HTTP ${res.status}: ${msg}`);
+    }
+    const data = await res.json();
+    const text = ((data.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    if (!text) throw new Error("Empty reply from the model");
+    try {
+      return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    } catch (e) {
+      return { say: text, board: [], question: null };
+    }
+  }
+
+  function toSkeleton(it, ox, oy) {
+    const x = ox + (+it.x || 0), y = oy + (+it.y || 0), color = it.color || "#1e1e1e";
+    switch (it.type) {
+      case "text":
+        return { type: "text", x, y, text: String(it.text || ""), fontSize: +it.size || 24, strokeColor: color };
+      case "rectangle": case "ellipse": case "diamond":
+        return {
+          type: it.type, x, y, width: +it.w || 100, height: +it.h || 60, strokeColor: color,
+          ...(it.fill ? { backgroundColor: it.fill, fillStyle: "solid" } : {}),
+        };
+      case "arrow": case "line":
+        if (!(+it.w) && !(+it.h)) return null;
+        return { type: it.type, x, y, width: +it.w || 0, height: +it.h || 0, strokeColor: color };
+    }
+    return null;
+  }
+
+  async function drawBlock(items, clear) {
+    if (!api) return;
+    if (clear) api.resetScene();
+    const live = api.getSceneElements().filter((e) => !e.isDeleted);
+    const oy = live.length ? Math.max(...live.map((e) => e.y + (e.height || 0))) + 60 : 40;
+    const added = [];
+    for (const it of items || []) {
+      const sk = toSkeleton(it, 40, oy);
+      if (!sk) continue;
+      const els = ExcalidrawLib.convertToExcalidrawElements([sk]);
+      added.push(...els);
+      api.updateScene({ elements: [...api.getSceneElements(), ...els] });
+      await sleep(350);
+    }
+    if (added.length) api.scrollToContent(added, { fitToViewport: true, viewportZoomFactor: 0.8, animate: true });
+  }
+
+  async function present(out) {
+    if (out.say) say(out.say);
+    await drawBlock(out.board, !!out.clear);
+    if (out.question) say(out.question);
+  }
+
+  function friendlyError(e) {
+    const m = String((e && e.message) || e);
+    if (m === "NOKEY") return "I need a Gemini API key. Open the menu (☰) and paste one in, or add it to config.js.";
+    if (/429|quota|rate/i.test(m)) return "Rate limit reached. Wait a minute and try again.";
+    return "Gemini error: " + m;
+  }
+
+  async function ask(text) {
+    if (busy) return;
+    busy = true;
+    if (synth) synth.cancel();
+    say(text, "me");
+    history.push({ role: "user", text });
+    setCaption("…");
+    try {
+      const out = await callGemini();
+      history.push({ role: "model", text: JSON.stringify(out) });
+      await present(out);
+    } catch (err) {
+      history.pop();
+      say(friendlyError(err), "tutor", { silent: true });
+    } finally {
+      persistHistory();
+      busy = false;
+    }
+  }
+
+  // ---------- Microphone ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const mic = $("btn-mic");
+  if (!SR) {
+    mic.style.display = "none";
+  } else {
+    let rec = null, listening = false;
+    mic.addEventListener("click", () => {
+      if (listening) { rec.stop(); return; }
+      if (synth) synth.cancel();
+      rec = new SR();
+      rec.lang = navigator.language || "en-US";
+      rec.interimResults = true;
+      rec.onstart = () => { listening = true; mic.classList.add("rec"); setCaption("Listening…"); };
+      rec.onend = () => { listening = false; mic.classList.remove("rec"); };
+      rec.onerror = (ev) => {
+        if (ev.error === "not-allowed") say("Microphone access was blocked in your browser.", "tutor", { silent: true });
+      };
+      rec.onresult = (ev) => {
+        const input = $("tutor-input");
+        let t = "", fin = false;
+        for (const r of ev.results) { t += r[0].transcript; if (r.isFinal) fin = true; }
+        input.value = t;
+        setCaption("🎤 " + t);
+        if (fin) { input.value = ""; if (t.trim()) ask(t.trim()); }
+      };
+      rec.start();
+    });
+  }
+
+  // ---------- Menu actions ----------
+  $("btn-demo").addEventListener("click", () => { closeMenu(); demoLesson(); });
+  $("btn-clear").addEventListener("click", () => {
+    if (api && confirm("Clear the whole board?")) { api.resetScene(); closeMenu(); }
+  });
+  $("btn-new").addEventListener("click", () => {
+    if (!confirm("Start a new lesson? This clears the board and the conversation.")) return;
+    closeMenu();
+    if (synth) synth.cancel();
+    history = []; persistHistory();
+    log.innerHTML = "";
+    if (api) api.resetScene();
+    say("New lesson! What would you like to learn?", "tutor", { silent: true });
+  });
+
+  // ---------- Export / import ----------
+  $("btn-export").addEventListener("click", async () => {
+    const backup = {
+      app: "boardtutor", version: 1, exportedAt: new Date().toISOString(),
+      settings,
+      sessions: await idbAll("sessions"),
+      progress: await idbAll("progress"),
+    };
+    const blob = new Blob([JSON.stringify(backup)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "boardtutor-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  const fileInput = $("file-import");
+  $("btn-import").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    fileInput.value = "";
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.app !== "boardtutor") throw new Error("Not a BoardTutor backup");
+      if (!confirm("Importing replaces your current settings and board. Continue?")) return;
+      saveSettings({ ...DEFAULTS, ...data.settings });
+      for (const s of data.sessions || []) await idbPut("sessions", s);
+      for (const p of data.progress || []) await idbPut("progress", p);
+      location.reload();
+    } catch (err) {
+      alert("Import failed: " + err.message);
+    }
+  });
+
+  // ---------- Mount Excalidraw ----------
+  async function mount() {
+    const saved = await idbGet("sessions", "current").catch(() => null);
+    const e = React.createElement;
+    let timer = null;
+
+    function App() {
+      const [view, setView] = React.useState(phonePortrait());
+      React.useEffect(() => {
+        setViewHook = setView;
+        return () => { setViewHook = null; };
+      }, []);
+      return e(ExcalidrawLib.Excalidraw, {
+        excalidrawAPI: (a) => { api = a; },
+        viewModeEnabled: view,   // phone portrait: look, pan and zoom only
+        zenModeEnabled: view,    // hide extra buttons on the small board
+        initialData: saved
+          ? { elements: saved.elements, files: saved.files, scrollToContent: true }
+          : undefined,
+        onChange: (elements, appState, files) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            idbPut("sessions", { id: "current", elements, files, updated: Date.now() }).catch(() => {});
+          }, 800);
+        },
+        UIOptions: { canvasActions: { loadScene: false, saveToActiveFile: false } },
+      });
+    }
+    ReactDOM.createRoot($("board")).render(e(App));
+    $("board-loading").remove();
+  }
+  mount().catch((err) => {
+    $("board-loading").textContent = "Couldn't load the whiteboard: " + err.message;
+  });
+
+  layout();
+
+  // Hooks for other code.
+  window.BoardTutor = { say, draw, ask, getSettings: () => ({ ...settings }), idbGet, idbPut };
+})();

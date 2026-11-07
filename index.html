@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#000000" />
+  <title>BoardTutor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="mode-full">
+
+  <div class="app">
+    <!-- Photo header (phone portrait only). Tutor subtitles show here. -->
+    <header class="hero" id="hero">
+      <p class="caption-text hero-caption"></p>
+    </header>
+
+    <!-- Whiteboard: view-only in phone portrait, editable when rotated / on tablet & computer -->
+    <section class="board-wrap" id="board-wrap">
+      <div id="board"></div>
+      <div id="board-loading" class="board-loading">Loading whiteboard…</div>
+      <p class="caption-text board-caption"></p>
+      <button type="button" id="btn-expand" class="expand-btn" aria-label="Expand whiteboard">
+        <svg class="ico-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
+        <svg class="ico-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10h-6V4M4 14h6v6M14 10l7-7M10 14l-7 7"/></svg>
+      </button>
+    </section>
+
+    <!-- Toolbar -->
+    <form id="tutor-form" class="toolbar" autocomplete="off">
+      <input id="tutor-input" type="text" placeholder="Ask or answer…" enterkeyhint="send" />
+      <button type="button" id="btn-mic" class="icon mic" aria-label="Speak">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <button type="button" id="btn-menu" class="icon" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+    </form>
+  </div>
+
+  <!-- Everything else lives in here -->
+  <div id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
+    <aside class="drawer-panel">
+      <div class="panel-head">
+        <h2>✏️ BoardTutor</h2>
+        <button type="button" id="btn-close-menu" class="close" aria-label="Close">✕</button>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" id="btn-demo" class="primary">▶ Demo lesson</button>
+        <button type="button" id="btn-new">New lesson</button>
+        <button type="button" id="btn-clear">Clear board</button>
+      </div>
+
+      <h3>Your tutor</h3>
+      <label>Subject
+        <select id="set-subject">
+          <option>Math</option><option>Physics</option><option>Chemistry</option>
+          <option>Biology</option><option>English</option><option>History</option>
+          <option>Computer Science</option>
+        </select>
+      </label>
+      <label>Grade level
+        <select id="set-grade">
+          <option>Grade 1-3</option><option>Grade 4-6</option><option>Grade 7-9</option>
+          <option selected>Grade 10-12</option><option>University</option>
+        </select>
+      </label>
+      <label>Difficulty
+        <select id="set-difficulty">
+          <option>Easy</option><option selected>Medium</option><option>Hard</option>
+        </select>
+      </label>
+      <label>Teaching style
+        <select id="set-style">
+          <option value="visual">Visual</option>
+          <option value="step">Step-by-step</option>
+          <option value="concise">Concise</option>
+        </select>
+      </label>
+      <label>Tutor personality
+        <select id="set-personality">
+          <option value="friendly">Friendly coach</option>
+          <option value="patient">Calm &amp; patient</option>
+          <option value="socratic">Socratic (asks a lot)</option>
+          <option value="energetic">Energetic</option>
+        </select>
+      </label>
+
+      <h3>Voice</h3>
+      <label class="row"><input type="checkbox" id="set-voice" /> Tutor speaks aloud</label>
+      <label>Speech speed
+        <input id="set-rate" type="range" min="0.7" max="1.4" step="0.1" />
+      </label>
+
+      <h3>Look</h3>
+      <div class="btn-row">
+        <button type="button" id="btn-hero">Change background photo</button>
+        <button type="button" id="btn-hero-reset">Reset</button>
+        <input id="file-hero" type="file" accept="image/*" hidden />
+      </div>
+
+      <h3>Gemini</h3>
+      <label>API key (optional if built in)
+        <input id="set-key" type="password" placeholder="Paste your key" autocomplete="off" />
+      </label>
+      <label>Model
+        <input id="set-model" type="text" />
+      </label>
+      <p class="hint">Free key at aistudio.google.com/apikey. It stays in this browser and is never exported.</p>
+
+      <h3>Backup</h3>
+      <div class="btn-row">
+        <button type="button" id="btn-export">Export</button>
+        <button type="button" id="btn-import">Import</button>
+        <input id="file-import" type="file" accept="application/json" hidden />
+      </div>
+
+      <details class="convo">
+        <summary>Conversation</summary>
+        <div id="tutor-log" class="tutor-log"></div>
+      </details>
+    </aside>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script>window.EXCALIDRAW_ASSET_PATH = "https://unpkg.com/@excalidraw/excalidraw@0.17.6/dist/";</script>
+  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
